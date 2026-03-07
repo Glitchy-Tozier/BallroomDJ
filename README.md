@@ -100,6 +100,8 @@ Song names from the list are matched **fuzzily** against:
 Install dependencies:
 
 ```bash
+python3.12 -m venv venv  # If necessary
+source venv/bin/activate # If necessary
 pip install numpy pygame pyloudnorm mutagen pydub
 ```
 
