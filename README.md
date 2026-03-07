@@ -8,7 +8,7 @@ It was designed for mixed dance events that combine **ballroom/Latin dances** wi
 
 ---
 
-# Features
+## Features
 
 - **Weighted random dance selection**
   - Prevents the same dance type from repeating too often
@@ -26,7 +26,7 @@ It was designed for mixed dance events that combine **ballroom/Latin dances** wi
   - Uses both **file names** and **audio metadata (artist/title)**
 
 - **Automatic loudness normalization**
-  - Normalizes songs to approximately **-14 LUFS**
+  - Normalizes songs to approximately **-14 LUFS** to ensure consistent volume across different tracks
 
 - **Silence trimming**
   - Removes long silence at the beginning/end of tracks
@@ -38,18 +38,19 @@ It was designed for mixed dance events that combine **ballroom/Latin dances** wi
   - Shows:
     - current dance + song
     - next dance + song
-    - recent songs
-    - progress bar
+    - previous dances + songs
+    - current progress bar
     - empty categories
 
 ---
 
-# Song List Format
+## Setup
+
+### Song List Format
 
 Songs are provided in a `.txt` file structured like this:
 
 ```
-
 Cha Cha Cha
 Song A
 Song B
@@ -71,14 +72,13 @@ Rules:
 - Categories are separated by a **blank line**
 - The file ends at ... the end of the file ... or the first line containing `---`.
 
-# Music Library
+### Music Library
 
 The script scans one or more directories recursively for audio files.
 
 Supported formats:
 
 ```
-
 mp3
 wav
 flac
@@ -86,30 +86,28 @@ m4a
 ogg
 opus
 aac
-
-````
+```
 
 Song names from the list are matched **fuzzily** against:
-
 - filename
 - artist metadata
 - title metadata
 
 ---
 
-# Installation
+## Installation
 
 Install dependencies:
 
 ```bash
 pip install numpy pygame pyloudnorm mutagen pydub
-````
+```
 
 You also need **ffmpeg** installed for `pydub`.
 
 ---
 
-# Configuration
+## Configuration
 
 Edit the configuration section at the top of the script.
 
@@ -126,7 +124,7 @@ Important settings:
 
 ---
 
-# Running the Script
+## Running the Script
 
 Start the player:
 
@@ -138,17 +136,17 @@ The GUI window will appear and the first song will be **paused** until you press
 
 ---
 
-# Command Line Options
+### Command Line Options: `--reset-log`
 
-Reset the played-song history from previous runs:
+Songs are written to `played_songs.log` so they won't repeat in future runs.
+
+`--reset-log` clears the `played_songs.log` file so songs can be played again.
 
 ```bash
 python dance_player.py --reset-log
 ```
 
-This clears the `played_songs.log` file so songs can be played again.
-
-If your PC crashes mid-event, resume without this command line parameter to avoid replaying previous soungs:
+Usually you want to use this parameter. If your PC crashes mid-event, resume _without_ this command line parameter to avoid replaying previous soungs:
 
 ```bash
 python dance_player.py # Don't reset log
@@ -156,7 +154,7 @@ python dance_player.py # Don't reset log
 
 ---
 
-# Controls
+### Controls
 
 The control window provides:
 
@@ -169,14 +167,6 @@ The control window provides:
 
 ---
 
-# Notes
-
-* Songs are written to `played_songs.log` so they won't repeat in future runs.
-* Loudness normalization ensures consistent volume across different tracks.
-* Silence trimming helps avoid awkward pauses before/after songs.
-
----
-
-# License
+## License
 
 AGPL-3.0
