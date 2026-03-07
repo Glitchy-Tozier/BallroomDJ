@@ -129,7 +129,7 @@ Important settings:
 Start the player:
 
 ```bash
-python dance_player.py --reset-log
+python ballroom_dj.py --reset-log
 ```
 
 The GUI window will appear and the first song will be **paused** until you press play.
@@ -143,13 +143,13 @@ Songs are written to `played_songs.log` so they won't repeat in future runs.
 `--reset-log` clears the `played_songs.log` file so songs can be played again.
 
 ```bash
-python dance_player.py --reset-log
+python ballroom_dj.py --reset-log # Start BallroomDJ with all songs available
 ```
 
 Usually you want to use this parameter. If your PC crashes mid-event, resume _without_ this command line parameter to avoid replaying previous soungs:
 
 ```bash
-python dance_player.py # Don't reset log -> continue where you left off last time
+python ballroom_dj.py # Don't reset log -> continue where you left off last time
 ```
 
 ---
