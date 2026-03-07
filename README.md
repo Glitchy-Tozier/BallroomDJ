@@ -179,4 +179,4 @@ The control window provides:
 
 # License
 
-GPL-3
+AGPL-3.0
