@@ -149,7 +149,7 @@ python dance_player.py --reset-log
 Usually you want to use this parameter. If your PC crashes mid-event, resume _without_ this command line parameter to avoid replaying previous soungs:
 
 ```bash
-python dance_player.py # Don't reset log
+python dance_player.py # Don't reset log -> continue where you left off last time
 ```
 
 ---
