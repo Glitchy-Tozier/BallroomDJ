@@ -5,10 +5,11 @@ import sys
 import threading
 import time
 import unicodedata
-from collections import deque
+from collections import deque, defaultdict
 from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, messagebox
+from pprint import pprint
 
 import numpy as np
 import pygame
@@ -36,7 +37,19 @@ MUSIC_ROOTS = [
 FINAL_SONG = "Annie Lennox - I Put A Spell On You"
 WCS_NAME = "West Coast Swing"
 
-COOLDOWN_ZERO = 4
+MIN_SONG_PAUSE = defaultdict(
+    # Default time until a song type can be played again. Should be smaller than the number of available song types
+    lambda: 5,
+    # Custom settings: Specify which songs should show up more/less frequently than the default set above ↑
+    {
+        "Paso Doble": 12,
+        "Samba": 8, 
+        "Tango": 8,
+        #WCS_NAME: 4,
+        "Wiener Walzer": 10,
+
+    }
+)
 TARGET_LOUDNESS = -14.0
 
 TEMP_FILE = "temp_song.wav"
@@ -312,26 +325,32 @@ def normalize_audio(path: Path) -> tuple[AudioSegment, float, float]:
 
 class DanceSelector:
     def __init__(self, categories: dict[str, list[str]]) -> None:
-        self.cooldowns = {category: 0 for category in categories.keys()}
+        default_pause = MIN_SONG_PAUSE.default_factory()
+        self.songs_passed_since = defaultdict(lambda: default_pause + 1)
         self.history = deque(maxlen=HISTORY_LENGTH)
 
     def _build_weights(self, available_categories: list[str]) -> list[float]:
         weights = []
+        #songs_passed_since_list = [] # For debugging
 
         for category in available_categories:
-            cooldown = self.cooldowns[category]
+            min_pause = MIN_SONG_PAUSE[category]
+            songs_passed_since = self.songs_passed_since[category]
+            #songs_passed_since_list.append(songs_passed_since) # For debugging
 
-            if cooldown > 0:
-                weights.append(0)
-            else:
-                recent = self.history.count(category)
-                weights.append(1 / (1 + recent))
-
+            weight = max(songs_passed_since - min_pause, 0) # No negative weights allowed!
+            weights.append(weight)
+            
+        #pprint([f"{a}: passed_since: {b} -> {c})" for a, b, c in (zip(available_categories, songs_passed_since_list, weights))]) # For debugging
         return weights
 
     def _weighted_pick(self, categories: list[str], weights: list[float]) -> str:
         if sum(weights) == 0:
-            return random.choice(categories)
+            # choose dance closest to its minimum pause
+            return max(
+                categories,
+                key=lambda c: self.songs_passed_since[c] / MIN_SONG_PAUSE[c]
+            )
 
         return random.choices(categories, weights=weights, k=1)[0]
 
@@ -350,11 +369,10 @@ class DanceSelector:
 
         self.history.append(choice)
 
-        for category in self.cooldowns:
-            if self.cooldowns[category] > 0:
-                self.cooldowns[category] -= 1
+        for category in self.songs_passed_since:
+            self.songs_passed_since[category] += 1
 
-        self.cooldowns[choice] = COOLDOWN_ZERO
+        self.songs_passed_since[choice] = 0
 
 
 # -------------------------------------------
