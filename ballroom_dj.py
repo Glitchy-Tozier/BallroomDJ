@@ -371,10 +371,13 @@ class MusicPlayer:
             channels=2,
         )
         self.paused = False
+        self.position_offset = 0   # absolute position in ms (updated on every play/start)
 
-    def play(self, path: str) -> None:
+    def play(self, path: str, start: float = 0.0) -> None:
+        """Start (or restart) playback. start is in seconds from beginning of song."""
         pygame.mixer.music.load(path)
-        pygame.mixer.music.play()
+        pygame.mixer.music.play(start=start)
+        self.position_offset = int(start * 1000)
 
     def wait(self) -> None:
         while True:
@@ -401,10 +404,34 @@ class MusicPlayer:
         pygame.mixer.music.stop()
 
     def get_pos(self) -> int:
+        """Return absolute position in ms from start of song (correct even after seek)."""
         try:
-            return pygame.mixer.music.get_pos()
+            raw = pygame.mixer.music.get_pos()
+            if raw < 0:
+                return -1
+            return int(self.position_offset + raw)
         except Exception:
             return -1
+
+    def seek(self, seconds: float) -> None:
+        """Reliable seek: stop, restart from exact position, preserve pause state.
+        get_pos() is now always correct immediately thanks to position_offset."""
+        if seconds < 0:
+            seconds = 0.0
+
+        was_paused = self.paused
+        self.skip()  # stop
+
+        pygame.mixer.music.load(TEMP_FILE)
+        pygame.mixer.music.play(start=seconds)
+        self.position_offset = int(seconds * 1000)
+
+        if was_paused:
+            pygame.mixer.music.pause()
+            print("⏸ Paused (after seek)")
+            self.paused = True
+        else:
+            self.paused = False
 
 
 # -------------------------------------------
@@ -489,6 +516,10 @@ class ControlWindow:
 
         self.progress = ttk.Progressbar(progress_frame, mode="determinate")
         self.progress.pack(fill="x", padx=5, pady=(0, 5))
+
+        # Click + drag on progress bar = seek (instant visual feedback)
+        self.progress.bind("<Button-1>", self._on_progress_click)
+        self.progress.bind("<B1-Motion>", self._on_progress_click)
 
         times_frame = ttk.Frame(progress_frame)
         times_frame.pack(fill="x")
@@ -618,6 +649,30 @@ class ControlWindow:
             self.progress.config(value=0)
             self.elapsed_label.config(text="00:00")
 
+    def _on_progress_click(self, event) -> None:
+        """Handle left-click or drag on the progress bar to seek.
+        Provides instant visual feedback + calls the player through the controller.
+        Works while paused (including the very first song) and respects final-song queuing."""
+        if self.current_duration_ms <= 0:
+            return
+
+        widget_width = self.progress.winfo_width()
+        if widget_width <= 0:
+            return
+
+        click_x = max(0, min(event.x, widget_width))
+        fraction = click_x / widget_width
+        new_pos_ms = int(fraction * self.current_duration_ms)
+        new_pos_seconds = new_pos_ms / 1000.0
+
+        # Instant visual feedback (progress + elapsed time)
+        elapsed_s = new_pos_ms // 1000
+        self.elapsed_label.config(text=f"{elapsed_s//60:02d}:{elapsed_s%60:02d}")
+        self.progress.config(value=fraction * 100)
+
+        # Delegate seek (keeps design consistent with pause/skip)
+        self.controller.seek(new_pos_seconds)
+
     def update_pause_button(self, paused: bool) -> None:
         if paused:
             self.pause_btn.config(text="▶ Continue")
@@ -695,6 +750,10 @@ class DanceController:
 
     def skip(self) -> None:
         self.player.skip()
+
+    def seek(self, seconds: float) -> None:
+        """Delegate seeking to the MusicPlayer (keeps all audio control in one place)."""
+        self.player.seek(seconds)
 
     def play_final(self) -> None:
         if FINAL_SONG and messagebox.askyesno(
