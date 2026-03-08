@@ -48,7 +48,6 @@ SILENCE_MIN_LEN_MS = 200
 
 HISTORY_LENGTH = 12
 
-EXCLUDE_SONGS_FROM_PREV_RUN = True
 PLAYED_LOG_FILE = HOME / "Music/played_songs.log"
 
 # -------------------------------------------
@@ -723,7 +722,7 @@ class DanceController:
                 log_path.unlink()
                 print("✓ Played songs log reset for new event.")
 
-        if EXCLUDE_SONGS_FROM_PREV_RUN and Path(PLAYED_LOG_FILE).exists():
+        if Path(PLAYED_LOG_FILE).exists():
             try:
                 with open(PLAYED_LOG_FILE, encoding="utf8") as f:
                     loaded = {line.strip() for line in f if line.strip()}
