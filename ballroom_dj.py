@@ -35,7 +35,6 @@ MUSIC_ROOTS = [
 ]
 
 FINAL_SONG = "Annie Lennox - I Put A Spell On You"
-WCS_NAME = "West Coast Swing"
 
 MIN_SONG_PAUSE = defaultdict(
     # Default time until a song type can be played again. Should be smaller than the number of available song types
@@ -45,11 +44,23 @@ MIN_SONG_PAUSE = defaultdict(
         "Paso Doble": 12,
         "Samba": 8, 
         "Tango": 8,
-        #WCS_NAME: 4,
+        #"West Coast Swing": 4,
         "Wiener Walzer": 10,
 
     }
 )
+SONG_CATEGORY_REPEATS = defaultdict(
+    # Move on to other song categories after playing this many songs from the current song category.
+    # Default is 1. (i.e. after one ChaChaCha is played, a non-ChaChaCha-song is chosen next)
+    lambda: 1,
+    # Custom settings: Specify in which song categories multiple songs should be played right after each other.
+    {
+        #"Tango Argentino": 4,
+        "West Coast Swing": 2,
+
+    }
+)
+
 TARGET_LOUDNESS = -14.0
 
 TEMP_FILE = "temp_song.wav"
@@ -856,7 +867,7 @@ class DanceController:
                 else:
                     break
 
-            repeat = 2 if dance == WCS_NAME else 1
+            repeat = SONG_CATEGORY_REPEATS[dance]
 
             for repeat_idx in range(repeat):
                 if self.next_item and self.next_item[0] == dance and self.next_item[1] not in self.played:
