@@ -131,6 +131,7 @@ Important settings:
 Start the player:
 
 ```bash
+source venv/bin/activate # If necessary
 python ballroom_dj.py --reset-log
 ```
 
