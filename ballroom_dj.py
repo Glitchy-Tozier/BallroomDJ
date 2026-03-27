@@ -23,25 +23,27 @@ from pydub.silence import detect_nonsilent
 # CONFIG
 # -------------------------------------------
 
-os.environ["SDL_AUDIODRIVER"] = "pulse"
+os.environ["SDL_AUDIODRIVER"] = "pulse"  # Use PulseAudio backend (Linux audio system)
 
-HOME = Path.home()
+HOME = Path.home()  # User home directory (base for all paths below)
 
-SONG_LIST_FILE = HOME / "Music/Tanzmusik.txt"
-MUSIC_ROOTS = [
+SONG_LIST_FILE = HOME / "Music/Tanzmusik.txt"  # Text file defining dance categories + songs
+
+MUSIC_ROOTS = [  # Folders where audio files are searched recursively
     HOME / "Music/Arni",
     HOME / "Music/NewPipe",
     HOME / "Music/Seal",
 ]
 
-FINAL_SONG = "Annie Lennox - I Put A Spell On You"
+FINAL_SONG = "Annie Lennox - I Put A Spell On You"  # Played at the very end (None to disable)
 
 MIN_SONG_PAUSE = defaultdict(
-    # Default time until a song type can be played again. Should be smaller than the number of available song types
+    # Default: how many songs must pass before a dance can repeat.
+    # Should be smaller than the number of available song types
     lambda: 5,
     # Custom settings: Specify which songs should show up more/less frequently than the default set above ↑
     {
-        "Paso Doble": 12,
+        "Paso Doble": 12, # Higher = rarer
         "Samba": 8, 
         "Tango": 8,
         #"West Coast Swing": 4,
@@ -50,8 +52,8 @@ MIN_SONG_PAUSE = defaultdict(
     }
 )
 SONG_CATEGORY_REPEATS = defaultdict(
-    # Move on to other song categories after playing this many songs from the current song category.
-    # Default is 1. (i.e. after one ChaChaCha is played, a non-ChaChaCha-song is chosen next)
+    # Default: play 1 song per dance category before switching to the next dance category
+    # (i.e. after one ChaChaCha is played, a non-ChaChaCha-song is chosen next)
     lambda: 1,
     # Custom settings: Specify in which song categories multiple songs should be played right after each other.
     {
@@ -61,18 +63,18 @@ SONG_CATEGORY_REPEATS = defaultdict(
     }
 )
 
-TARGET_LOUDNESS = -14.0
+TARGET_LOUDNESS = -14.0  # Normalize all songs to this loudness (LUFS)
 
-TEMP_FILE = "temp_song.wav"
+TEMP_FILE = "temp_song.wav"  # Temporary file used for playback (processed audio)
 
-TRIM_SILENCE = True
-SILENCE_THRESHOLD_DB = -50
-SILENCE_CHUNK_MS = 10
-SILENCE_MIN_LEN_MS = 200
+TRIM_SILENCE = True  # Automatically remove silence at start/end of songs
+SILENCE_THRESHOLD_DB = -50  # What counts as silence (lower = stricter)
+SILENCE_CHUNK_MS = 10       # Analysis step size (smaller = more precise)
+SILENCE_MIN_LEN_MS = 500    # Minimum silence length to be trimmed
 
-HISTORY_LENGTH = 12
+HISTORY_LENGTH = 12  # Number of recent songs shown in UI
 
-PLAYED_LOG_FILE = HOME / "Music/played_songs.log"
+PLAYED_LOG_FILE = HOME / "Music/played_songs.log"  # Stores played songs to avoid repeats across runs
 
 # -------------------------------------------
 # PRETTY CONSOLE
