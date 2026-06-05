@@ -35,18 +35,19 @@ MUSIC_ROOTS = [  # Folders where audio files are searched recursively
     HOME / "Music/Seal",
 ]
 
-FINAL_SONG = "Annie Lennox - I Put A Spell On You"  # Played at the very end (None to disable)
+FINAL_SONG = "Teddy Swims - Lose Control (Live)"  # Played at the very end (None to disable)
 
 MIN_SONG_PAUSE = defaultdict(
     # Default: how many songs must pass before a dance can repeat.
     # Should be smaller than the number of available song types
-    lambda: 5,
+    lambda: 6,
     # Custom settings: Specify which songs should show up more/less frequently than the default set above ↑
     {
+        "Langsamer Walzer": 7,
         "Paso Doble": 12, # Higher = rarer
         "Samba": 8, 
         "Tango": 8,
-        #"West Coast Swing": 4,
+        "West Coast Swing": 4, # Higher = more common
         "Wiener Walzer": 10,
 
     }
@@ -68,7 +69,7 @@ TARGET_LOUDNESS = -14.0  # Normalize all songs to this loudness (LUFS)
 TEMP_FILE = "temp_song.wav"  # Temporary file used for playback (processed audio)
 
 TRIM_SILENCE = True  # Automatically remove silence at start/end of songs
-SILENCE_THRESHOLD_DB = -50  # What counts as silence (lower = stricter)
+SILENCE_THRESHOLD_DB = -80  # What counts as silence (lower = stricter)
 SILENCE_CHUNK_MS = 10       # Analysis step size (smaller = more precise)
 SILENCE_MIN_LEN_MS = 500    # Minimum silence length to be trimmed
 
