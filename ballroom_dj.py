@@ -9,7 +9,7 @@ from collections import deque, defaultdict
 from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, messagebox
-from pprint import pprint
+from pprint import pprint  # noqa: F401
 
 import numpy as np
 import pygame
@@ -27,7 +27,8 @@ os.environ["SDL_AUDIODRIVER"] = "pulse"  # Use PulseAudio backend (Linux audio s
 
 HOME = Path.home()  # User home directory (base for all paths below)
 
-SONG_LIST_FILE = HOME / "Music/Tanzmusik.txt"  # Text file defining dance categories + songs
+# Text file defining dance categories + songs
+SONG_LIST_FILE = HOME / "Music/Tanzmusik.txt"
 
 MUSIC_ROOTS = [  # Folders where audio files are searched recursively
     HOME / "Music/Arni",
@@ -35,7 +36,8 @@ MUSIC_ROOTS = [  # Folders where audio files are searched recursively
     HOME / "Music/Seal",
 ]
 
-FINAL_SONG = "Teddy Swims - Lose Control (Live)"  # Played at the very end (None to disable)
+# Played at the very end (None to disable)
+FINAL_SONG = "Teddy Swims - Lose Control (Live)"
 
 MIN_SONG_PAUSE = defaultdict(
     # Default: how many songs must pass before a dance can repeat.
@@ -44,13 +46,12 @@ MIN_SONG_PAUSE = defaultdict(
     # Custom settings: Specify which songs should show up more/less frequently than the default set above ↑
     {
         "Langsamer Walzer": 7,
-        "Paso Doble": 12, # Higher = rarer
-        "Samba": 8, 
+        "Paso Doble": 12,  # Higher = rarer
+        "Samba": 8,
         "Tango": 8,
-        "West Coast Swing": 4, # Higher = more common
+        "West Coast Swing": 4,  # Higher = more common
         "Wiener Walzer": 10,
-
-    }
+    },
 )
 SONG_CATEGORY_REPEATS = defaultdict(
     # Default: play 1 song per dance category before switching to the next dance category
@@ -58,10 +59,9 @@ SONG_CATEGORY_REPEATS = defaultdict(
     lambda: 1,
     # Custom settings: Specify in which song categories multiple songs should be played right after each other.
     {
-        #"Tango Argentino": 4,
+        # "Tango Argentino": 4,
         "West Coast Swing": 2,
-
-    }
+    },
 )
 
 TARGET_LOUDNESS = -14.0  # Normalize all songs to this loudness (LUFS)
@@ -70,16 +70,18 @@ TEMP_FILE = "temp_song.wav"  # Temporary file used for playback (processed audio
 
 TRIM_SILENCE = True  # Automatically remove silence at start/end of songs
 SILENCE_THRESHOLD_DB = -80  # What counts as silence (lower = stricter)
-SILENCE_CHUNK_MS = 10       # Analysis step size (smaller = more precise)
-SILENCE_MIN_LEN_MS = 500    # Minimum silence length to be trimmed
+SILENCE_CHUNK_MS = 10  # Analysis step size (smaller = more precise)
+SILENCE_MIN_LEN_MS = 500  # Minimum silence length to be trimmed
 
 HISTORY_LENGTH = 12  # Number of recent songs shown in UI
 
-PLAYED_LOG_FILE = HOME / "Music/played_songs.log"  # Stores played songs to avoid repeats across runs
+# Stores played songs to avoid repeats across runs
+PLAYED_LOG_FILE = HOME / "Music/played_songs.log"
 
 # -------------------------------------------
 # PRETTY CONSOLE
 # -------------------------------------------
+
 
 def bold(text: str) -> str:
     return f"\033[1m{text}\033[0m"
@@ -88,9 +90,11 @@ def bold(text: str) -> str:
 def divider() -> None:
     print("─" * 48)
 
+
 # -------------------------------------------
 # SILENCE TRIMMING
 # -------------------------------------------
+
 
 def trim_silence(audio: AudioSegment) -> AudioSegment:
     if not TRIM_SILENCE:
@@ -114,9 +118,11 @@ def trim_silence(audio: AudioSegment) -> AudioSegment:
 
     return audio[start:end]
 
+
 # -------------------------------------------
 # LOAD SONG LIST
 # -------------------------------------------
+
 
 def load_song_list(path: str) -> dict[str, list[str]]:
     categories = {}
@@ -198,12 +204,14 @@ class SongEntry:
         else:
             self.full = self.title
 
-        combined = " ".join([
-            self.artist or "",
-            self.title or "",
-            self.file_stem or "",
-            self.path.name or "",
-        ])
+        combined = " ".join(
+            [
+                self.artist or "",
+                self.title or "",
+                self.file_stem or "",
+                self.path.name or "",
+            ]
+        )
 
         cleaned = clean_for_matching(combined)
 
@@ -308,6 +316,7 @@ def scan_audio_files(roots: list[str]) -> list[Path]:
 # NORMALIZE LOUDNESS
 # -------------------------------------------
 
+
 def normalize_audio(path: Path) -> tuple[AudioSegment, float, float]:
     audio = AudioSegment.from_file(path)
 
@@ -337,6 +346,7 @@ def normalize_audio(path: Path) -> tuple[AudioSegment, float, float]:
 # DANCE SELECTION
 # -------------------------------------------
 
+
 class DanceSelector:
     def __init__(self, categories: dict[str, list[str]]) -> None:
         default_pause = MIN_SONG_PAUSE.default_factory()
@@ -345,25 +355,25 @@ class DanceSelector:
 
     def _build_weights(self, available_categories: list[str]) -> list[float]:
         weights = []
-        #songs_passed_since_list = [] # For debugging
+        # songs_passed_since_list = [] # For debugging
 
         for category in available_categories:
             min_pause = MIN_SONG_PAUSE[category]
             songs_passed_since = self.songs_passed_since[category]
-            #songs_passed_since_list.append(songs_passed_since) # For debugging
+            # songs_passed_since_list.append(songs_passed_since) # For debugging
 
-            weight = max(songs_passed_since - min_pause, 0) # No negative weights allowed!
+            # No negative weights allowed!
+            weight = max(songs_passed_since - min_pause, 0)
             weights.append(weight)
-            
-        #pprint([f"{a}: passed_since: {b} -> {c})" for a, b, c in (zip(available_categories, songs_passed_since_list, weights))]) # For debugging
+
+        # pprint([f"{a}: passed_since: {b} -> {c})" for a, b, c in (zip(available_categories, songs_passed_since_list, weights))]) # For debugging
         return weights
 
     def _weighted_pick(self, categories: list[str], weights: list[float]) -> str:
         if sum(weights) == 0:
             # choose dance closest to its minimum pause
             return max(
-                categories,
-                key=lambda c: self.songs_passed_since[c] / MIN_SONG_PAUSE[c]
+                categories, key=lambda c: self.songs_passed_since[c] / MIN_SONG_PAUSE[c]
             )
 
         return random.choices(categories, weights=weights, k=1)[0]
@@ -393,6 +403,7 @@ class DanceSelector:
 # MUSIC PLAYER
 # -------------------------------------------
 
+
 class MusicPlayer:
     def __init__(self) -> None:
         pygame.mixer.quit()
@@ -402,7 +413,8 @@ class MusicPlayer:
             channels=2,
         )
         self.paused = False
-        self.position_offset = 0   # absolute position in ms (updated on every play/start)
+        # absolute position in ms (updated on every play/start)
+        self.position_offset = 0
 
     def play(self, path: str, start: float = 0.0) -> None:
         """Start (or restart) playback. start is in seconds from beginning of song."""
@@ -468,6 +480,7 @@ class MusicPlayer:
 # -------------------------------------------
 # GUI
 # -------------------------------------------
+
 
 class ControlWindow:
     def __init__(self, controller: "DanceController") -> None:
@@ -598,7 +611,15 @@ class ControlWindow:
         self.current_duration_ms = 0
         self.updating_progress = False
 
-    def update(self, current: str, next_song: str, empty_categories: list[str], history: list[tuple[str, str]], duration_ms: int = 0, final_queued: bool = False) -> None:
+    def update(
+        self,
+        current: str,
+        next_song: str,
+        empty_categories: list[str],
+        history: list[tuple[str, str]],
+        duration_ms: int = 0,
+        final_queued: bool = False,
+    ) -> None:
         self.root.after(
             0,
             self._update_ui,
@@ -610,7 +631,15 @@ class ControlWindow:
             final_queued,
         )
 
-    def _update_ui(self, current: str, next_song: str, empty_categories: list[str], history: list[tuple[str, str]], duration_ms: int, final_queued: bool) -> None:
+    def _update_ui(
+        self,
+        current: str,
+        next_song: str,
+        empty_categories: list[str],
+        history: list[tuple[str, str]],
+        duration_ms: int,
+        final_queued: bool,
+    ) -> None:
         # Next
         if final_queued and FINAL_SONG:
             self.next_label.config(text=f"FINAL SONG:  {FINAL_SONG}")
@@ -629,7 +658,9 @@ class ControlWindow:
             self.current_song_label.config(text=current)
 
         if empty_categories:
-            self.empty_label.config(text="Empty dance categories: " + ", ".join(empty_categories))
+            self.empty_label.config(
+                text="Empty dance categories: " + ", ".join(empty_categories)
+            )
         else:
             self.empty_label.config(text="")
 
@@ -642,7 +673,7 @@ class ControlWindow:
         self.current_duration_ms = int(duration_ms) if duration_ms else 0
         if self.current_duration_ms > 0:
             total_s = int(round(self.current_duration_ms / 1000.0))
-            self.total_label.config(text=f"{total_s//60:02d}:{total_s%60:02d}")
+            self.total_label.config(text=f"{total_s // 60:02d}:{total_s % 60:02d}")
             self.progress.config(value=0, maximum=100)
             if not self.updating_progress:
                 self.updating_progress = True
@@ -671,7 +702,9 @@ class ControlWindow:
                 self.progress.config(value=pct)
 
             elapsed_s = int(round(elapsed_ms / 1000.0))
-            self.elapsed_label.config(text=f"{elapsed_s//60:02d}:{elapsed_s%60:02d}")
+            self.elapsed_label.config(
+                text=f"{elapsed_s // 60:02d}:{elapsed_s % 60:02d}"
+            )
 
         if pygame.mixer.music.get_busy() or self.controller.player.paused:
             self.root.after(200, self._update_progress)
@@ -698,7 +731,7 @@ class ControlWindow:
 
         # Instant visual feedback (progress + elapsed time)
         elapsed_s = new_pos_ms // 1000
-        self.elapsed_label.config(text=f"{elapsed_s//60:02d}:{elapsed_s%60:02d}")
+        self.elapsed_label.config(text=f"{elapsed_s // 60:02d}:{elapsed_s % 60:02d}")
         self.progress.config(value=fraction * 100)
 
         # Delegate seek (keeps design consistent with pause/skip)
@@ -715,7 +748,7 @@ class ControlWindow:
             text="🎵 Final Song Queued",
             state="disabled",
         )
-    
+
     def show_final_preview(self) -> None:
         """Immediately show the final song preview."""
         if FINAL_SONG:
@@ -731,6 +764,7 @@ class ControlWindow:
 # -------------------------------------------
 # MAIN CONTROLLER
 # -------------------------------------------
+
 
 class DanceController:
     def __init__(self) -> None:
@@ -759,7 +793,9 @@ class DanceController:
                 with open(PLAYED_LOG_FILE, encoding="utf8") as f:
                     loaded = {line.strip() for line in f if line.strip()}
                 self.played.update(loaded)
-                print(f"✓ Loaded {len(loaded)} previously played songs from {PLAYED_LOG_FILE}")
+                print(
+                    f"✓ Loaded {len(loaded)} previously played songs from {PLAYED_LOG_FILE}"
+                )
             except Exception as e:
                 print(f"Warning: could not load played log: {e}")
 
@@ -771,7 +807,8 @@ class DanceController:
     def get_available_dances(self) -> list[str]:
         """Return only dances that still have unplayed songs."""
         return [
-            d for d in self.categories
+            d
+            for d in self.categories
             if any(s not in self.played and s != FINAL_SONG for s in self.categories[d])
         ]
 
@@ -792,12 +829,13 @@ class DanceController:
             f"Play the final song '{FINAL_SONG}' next?\n\nAfterwards, the app will be closed.",
         ):
             self.force_final = True
-            self.window.mark_final_requested() # Update button state
-            self.window.show_final_preview()   # Immediately update preview text
+            self.window.mark_final_requested()  # Update button state
+            self.window.show_final_preview()  # Immediately update preview text
 
     def choose_song(self, dance: str) -> str | None:
         songs = [
-            s for s in self.categories[dance]
+            s
+            for s in self.categories[dance]
             if s not in self.played and s != FINAL_SONG
         ]
         if not songs:
@@ -817,7 +855,8 @@ class DanceController:
                 dance = random.choice(available_categories)
 
             songs = [
-                s for s in self.categories[dance]
+                s
+                for s in self.categories[dance]
                 if s not in self.played and s != FINAL_SONG
             ]
             if songs:
@@ -827,7 +866,8 @@ class DanceController:
         # Final fallback
         for dance in available_categories:
             songs = [
-                s for s in self.categories[dance]
+                s
+                for s in self.categories[dance]
                 if s not in self.played and s != FINAL_SONG
             ]
             if songs:
@@ -846,13 +886,19 @@ class DanceController:
     def run(self) -> None:
         while True:
             available_categories = self.get_available_dances()
-            empty_categories = [c for c in self.categories if c not in available_categories]
+            empty_categories = [
+                c for c in self.categories if c not in available_categories
+            ]
 
             if not available_categories:
                 break
 
             # Get or refresh next_item
-            if self.next_item is None or self.next_item[0] not in available_categories or self.next_item[1] in self.played:
+            if (
+                self.next_item is None
+                or self.next_item[0] not in available_categories
+                or self.next_item[1] in self.played
+            ):
                 self.next_item = self.pick_next(available_categories)
 
             if self.next_item is None:
@@ -873,7 +919,11 @@ class DanceController:
             repeat = SONG_CATEGORY_REPEATS[dance]
 
             for repeat_idx in range(repeat):
-                if self.next_item and self.next_item[0] == dance and self.next_item[1] not in self.played:
+                if (
+                    self.next_item
+                    and self.next_item[0] == dance
+                    and self.next_item[1] not in self.played
+                ):
                     song = self.next_item[1]
                     self.played.add(song)
                 else:
@@ -899,13 +949,21 @@ class DanceController:
                     self.next_item = self.pick_next(available_after)
                 else:
                     # WCS second song (same dance)
-                    songs = [s for s in self.categories[dance] if s not in self.played and s != FINAL_SONG]
+                    songs = [
+                        s
+                        for s in self.categories[dance]
+                        if s not in self.played and s != FINAL_SONG
+                    ]
                     if songs:
                         self.next_item = (dance, random.choice(songs))
                     else:
                         self.next_item = self.pick_next(available_after)
 
-                next_display = f"{self.next_item[0]} — {self.next_item[1]}" if self.next_item else ""
+                next_display = (
+                    f"{self.next_item[0]} — {self.next_item[1]}"
+                    if self.next_item
+                    else ""
+                )
 
                 self.window.update(
                     f"{dance} - {song}",
@@ -921,9 +979,15 @@ class DanceController:
                 print(f"   Song: {bold(song)}")
                 print(f"   File: {path.name}")
                 dur_s = int(round(duration_ms / 1000.0))
-                print(f"   Length: {dur_s//60}:{dur_s%60:02d}")
-                if loudness is not None and not np.isnan(loudness) and not np.isinf(loudness):
-                    print(f"   Loudness: {loudness:.1f} LUFS → applied {gain_db:+.1f} dB")
+                print(f"   Length: {dur_s // 60}:{dur_s % 60:02d}")
+                if (
+                    loudness is not None
+                    and not np.isnan(loudness)
+                    and not np.isinf(loudness)
+                ):
+                    print(
+                        f"   Loudness: {loudness:.1f} LUFS → applied {gain_db:+.1f} dB"
+                    )
                 divider()
 
                 self.player.play(TEMP_FILE)
@@ -956,7 +1020,9 @@ class DanceController:
                 self.window.update(
                     f"Final Dance - {FINAL_SONG}",
                     "",
-                    list(self.categories.keys()),  # keep showing all (now empty) categories
+                    list(
+                        self.categories.keys()
+                    ),  # keep showing all (now empty) categories
                     list(self.song_history),
                     duration_ms,
                 )
@@ -965,9 +1031,15 @@ class DanceController:
                 print(f"▶ Final Song: {bold(FINAL_SONG)}")
                 print(f"   File: {path.name}")
                 dur_s = int(round(duration_ms / 1000.0))
-                print(f"   Length: {dur_s//60}:{dur_s%60:02d}")
-                if loudness is not None and not np.isnan(loudness) and not np.isinf(loudness):
-                    print(f"   Loudness: {loudness:.1f} LUFS → applied {gain_db:+.1f} dB")
+                print(f"   Length: {dur_s // 60}:{dur_s % 60:02d}")
+                if (
+                    loudness is not None
+                    and not np.isnan(loudness)
+                    and not np.isinf(loudness)
+                ):
+                    print(
+                        f"   Loudness: {loudness:.1f} LUFS → applied {gain_db:+.1f} dB"
+                    )
                 divider()
 
                 self.player.play(TEMP_FILE)
@@ -983,6 +1055,7 @@ class DanceController:
 # -------------------------------------------
 # RUN
 # -------------------------------------------
+
 
 def main() -> None:
     controller = DanceController()
