@@ -49,7 +49,7 @@ MIN_SONG_PAUSE = defaultdict(
         "Paso Doble": 12,  # Higher = rarer
         "Samba": 8,
         "Tango": 8,
-        "West Coast Swing": 4,  # Higher = more common
+        "West Coast Swing": 4,  # Lower = more common
         "Wiener Walzer": 10,
     },
 )
@@ -69,7 +69,7 @@ TARGET_LOUDNESS = -14.0  # Normalize all songs to this loudness (LUFS)
 TEMP_FILE = "temp_song.wav"  # Temporary file used for playback (processed audio)
 
 TRIM_SILENCE = True  # Automatically remove silence at start/end of songs
-SILENCE_THRESHOLD_DB = -80  # What counts as silence (lower = stricter)
+SILENCE_THRESHOLD_DB = -50  # What counts as silence (lower = stricter)
 SILENCE_CHUNK_MS = 10  # Analysis step size (smaller = more precise)
 SILENCE_MIN_LEN_MS = 500  # Minimum silence length to be trimmed
 
