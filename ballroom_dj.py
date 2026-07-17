@@ -173,47 +173,52 @@ def clean_for_matching(text: str) -> str:
 
 
 class SongEntry:
+    @staticmethod
+    def get_meta_tag(meta: MutagenFile, tag: str, fallback: str) -> str:
+        tag_value = meta.tags.get(tag, "")
+
+        if isinstance(tag_value, (list, tuple)) and tag_value:
+            return tag_value[0]
+        elif tag_value:
+            return tag_value
+        return fallback
+
     def __init__(self, path: Path) -> None:
         self.path = path
-        self.artist = ""
+        self.artist = ""  # Define fallback values
+        self.album = ""
         self.title = path.stem
-        self.file_stem = path.stem
 
         try:
             meta = MutagenFile(path, easy=True)
 
             if meta and meta.tags:
-                artist_tag = meta.tags.get("artist", "")
-                title_tag = meta.tags.get("title", "")
-
-                if isinstance(artist_tag, (list, tuple)) and artist_tag:
-                    self.artist = artist_tag[0]
-                elif artist_tag:
-                    self.artist = artist_tag
-
-                if isinstance(title_tag, (list, tuple)) and title_tag:
-                    self.title = title_tag[0]
-                elif title_tag:
-                    self.title = title_tag
+                self.artist = self.get_meta_tag(meta, "artist", self.artist)
+                self.album = self.get_meta_tag(meta, "album", self.album)
+                self.title = self.get_meta_tag(meta, "title", self.title)
 
         except Exception:
             pass
 
         if self.artist:
-            self.full = f"{self.artist} - {self.title}".strip(" -")
+            self.full = f"{self.artist} - {self.title}"
         else:
             self.full = self.title
 
+        # combined_o = " ".join([self.artist, self.title, self.path.name])
+        # cleaned_o = clean_for_matching(combined_o)
+        # print(normalize_unicode(cleaned_o))
+
         combined = " ".join(
             [
-                self.artist or "",
-                self.title or "",
-                self.file_stem or "",
-                self.path.name or "",
+                self.artist,
+                self.album,
+                self.title,
+                self.path.name,
             ]
         )
-
         cleaned = clean_for_matching(combined)
+        # print(normalize_unicode(cleaned))
 
         self.search_text = normalize_unicode(cleaned)
         self.token_set = set(self.search_text.split())
@@ -285,6 +290,7 @@ class SongMatcher:
             print("⚠ Multiple equally good matches:")
             for e in best_entries[:5]:
                 print("   ", e.path.name)
+                print(f'       Search Text: "{e.search_text}"')
 
         best_entry = min(best_entries, key=lambda e: len(e.search_text))
 
