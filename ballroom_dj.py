@@ -47,11 +47,11 @@ MIN_SONG_PAUSE = defaultdict(
     # Custom settings: Specify which songs should show up more/less frequently than the default set above ↑
     {
         "Langsamer Walzer": 7,
-        "Paso Doble": 12,  # Higher = rarer
+        "Paso Doble": 10,  # Higher = rarer
         "Samba": 8,
         "Tango": 8,
-        "West Coast Swing": 4,  # Lower = more common
-        "Wiener Walzer": 10,
+        "West Coast Swing": 3,  # Lower = more common
+        "Wiener Walzer": 9,
     },
 )
 SONG_CATEGORY_REPEATS = defaultdict(
