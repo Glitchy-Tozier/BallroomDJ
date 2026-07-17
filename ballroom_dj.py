@@ -14,6 +14,7 @@ from pprint import pprint  # noqa: F401
 import numpy as np
 import pygame
 import pyloudnorm as pyln
+from colorama import just_fix_windows_console, Fore, Style
 from mutagen import File as MutagenFile
 from pydub import AudioSegment
 from pydub.silence import detect_nonsilent
@@ -82,9 +83,23 @@ PLAYED_LOG_FILE = HOME / "Music/played_songs.log"
 # PRETTY CONSOLE
 # -------------------------------------------
 
+just_fix_windows_console()
+
+
+def success(text: str) -> str:
+    return f"{Fore.GREEN}{text}{Style.RESET_ALL}"
+
+
+def warning(text: str) -> str:
+    return f"{Fore.YELLOW}{text}{Style.RESET_ALL}"
+
+
+def error(text: str) -> str:
+    return f"{Fore.RED}{text}{Style.RESET_ALL}"
+
 
 def bold(text: str) -> str:
-    return f"\033[1m{text}\033[0m"
+    return f"{Style.BRIGHT}{text}{Style.NORMAL}"
 
 
 def divider() -> None:
@@ -226,13 +241,12 @@ class SongEntry:
 
 class SongMatcher:
     def __init__(self, song_names: list[str], audio_files: list[Path]) -> None:
-        print("Building SIMPLE word-count matcher (improved)...")
-
         self.entries = [SongEntry(f) for f in audio_files]
         self.mapping = {}
 
-        for song in song_names:
-            print(f'\nMatching "{song}"')
+        unique_songs = set(song_names)
+        for song in unique_songs:
+            print(f'\nMatching "{bold(song)}"')
 
             best_entry, best_count, best_prop = self._find_best_match(song)
 
@@ -240,19 +254,33 @@ class SongMatcher:
                 self.mapping[song] = best_entry.path
 
                 print(
-                    f"✓ {song} → {best_entry.full} "
-                    f"({best_entry.path.name}) "
-                    f"[{best_count} tokens matched, {best_prop:.0%} of query]"
+                    success(
+                        f"✓ {bold(best_entry.full)} "
+                        f"({best_entry.path.name}) "
+                        f"[{best_count} tokens matched, {best_prop:.0%} of query]"
+                    )
                 )
             else:
-                print(f"⚠ Weak/No match for '{song}' (best was {best_count} tokens)")
+                print(
+                    error(
+                        f"✗ Weak/No match for '{song}' (best was {best_count} tokens)"
+                    )
+                )
 
                 if best_entry:
-                    print(f"   Closest: {best_entry.full} ({best_entry.path.name})")
+                    print(
+                        error(f"   Closest: {best_entry.full} ({best_entry.path.name})")
+                    )
 
                 self.mapping[song] = None
 
-        print("Matching complete\n")
+        total_entries = len(unique_songs)
+        successful_matches = sum(p is not None for p in self.mapping.values())
+        failed_matches = total_entries - successful_matches
+        print("\nMatching complete!")
+        print(success(f"✓ {successful_matches}/{total_entries} successful"))
+        if failed_matches > 0:
+            print(error(f"✗ {failed_matches}/{total_entries} failed"))
 
     def _find_best_match(self, query: str) -> tuple[SongEntry | None, int, float]:
         query_clean = clean_for_matching(query)
@@ -287,10 +315,10 @@ class SongMatcher:
             return None, 0, 0.0
 
         if len(best_entries) > 1:
-            print("⚠ Multiple equally good matches:")
+            print(warning("⚠ Multiple equally good matches:"))
             for e in best_entries[:5]:
-                print("   ", e.path.name)
-                print(f'       Search Text: "{e.search_text}"')
+                print(warning(f"   • {e.path.name}"))
+                print(warning(f'       Search Text: "{e.search_text}"'))
 
         best_entry = min(best_entries, key=lambda e: len(e.search_text))
 
@@ -307,7 +335,7 @@ def scan_audio_files(roots: list[str]) -> list[Path]:
         root_path = Path(root)
 
         if not root_path.exists():
-            print(f"Warning: directory not found -> {root}")
+            print(error(f"Error: directory not found -> {root}"))
             continue
 
         for p in root_path.rglob("*"):
@@ -340,7 +368,7 @@ def normalize_audio(path: Path) -> tuple[AudioSegment, float, float]:
     loudness = meter.integrated_loudness(samples)
 
     if np.isnan(loudness) or np.isinf(loudness):
-        print(f"Warning: bad loudness for {path.name} → using original")
+        print(warning(f"Warning: bad loudness for {path.name} → using original"))
         return audio, loudness, 0.0
 
     gain_db = TARGET_LOUDNESS - loudness
@@ -792,7 +820,7 @@ class DanceController:
             log_path = Path(PLAYED_LOG_FILE)
             if log_path.exists():
                 log_path.unlink()
-                print("✓ Played songs log reset for new event.")
+                print(bold("✓ Played songs log reset for new event."))
 
         if Path(PLAYED_LOG_FILE).exists():
             try:
@@ -800,10 +828,13 @@ class DanceController:
                     loaded = {line.strip() for line in f if line.strip()}
                 self.played.update(loaded)
                 print(
-                    f"✓ Loaded {len(loaded)} previously played songs from {PLAYED_LOG_FILE}"
+                    success(
+                        f"\n✓ Loaded {len(loaded)} previously played songs from {PLAYED_LOG_FILE}"
+                    )
                 )
+
             except Exception as e:
-                print(f"Warning: could not load played log: {e}")
+                print(error(f"Error: could not load played log: {e}"))
 
         self.force_final = False
         self.next_item = None
@@ -887,7 +918,7 @@ class DanceController:
                 for song in sorted(self.played):
                     f.write(song + "\n")
         except Exception as e:
-            print(f"Warning: could not save played log: {e}")
+            print(warning(f"Warning: could not save played log: {e}"))
 
     def run(self) -> None:
         while True:
@@ -940,7 +971,7 @@ class DanceController:
 
                 path = self.matcher.get(song)
                 if path is None:
-                    print(f"Skipping '{song}' (no matched audio file)")
+                    print(error(f"Skipping '{song}' (no matched audio file)"))
                     continue
 
                 audio, loudness, gain_db = normalize_audio(path)

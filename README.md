@@ -102,7 +102,7 @@ Install dependencies:
 ```bash
 python3.12 -m venv venv  # If necessary
 source venv/bin/activate # If necessary
-pip install numpy pygame pyloudnorm mutagen pydub
+pip install numpy pygame pyloudnorm mutagen pydub colorama
 ```
 
 You also need **ffmpeg** installed for `pydub`.
