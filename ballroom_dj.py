@@ -820,7 +820,7 @@ class DanceController:
             log_path = Path(PLAYED_LOG_FILE)
             if log_path.exists():
                 log_path.unlink()
-                print(bold("✓ Played songs log reset for new event."))
+                print(success("\n✓ Played songs log reset for new event."))
 
         if Path(PLAYED_LOG_FILE).exists():
             try:
