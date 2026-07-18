@@ -643,6 +643,92 @@ class ControlWindow:
         self.current_duration_ms = 0
         self.updating_progress = False
 
+        # ---------- Startup dialog ----------
+        self.warning_style = ttk.Style()
+        self.warning_style.configure(
+            "Warning.TButton",
+            foreground="white",
+            background="#c62828",
+        )
+        self.warning_style.map(
+            "Warning.TButton",
+            background=[
+                ("active", "#b71c1c"),
+                ("pressed", "#8e0000"),
+            ],
+            foreground=[
+                ("active", "white"),
+                ("pressed", "white"),
+            ],
+        )
+
+    def ask_reset_log(self, log_size: int) -> bool:
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Previous Event")
+        dialog.resizable(False, False)
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        result = False
+
+        frame = ttk.Frame(dialog, padding=18)
+        frame.pack(fill="both", expand=True)
+
+        ttk.Label(
+            frame,
+            text=(
+                f"A previous event log with {log_size} played songs was found.\n\n"
+                "Do you want to continue the event or reset previous songs and start a new event?"
+            ),
+            justify="center",
+            wraplength=360,
+        ).pack(pady=(0, 15))
+
+        button_frame = ttk.Frame(frame)
+        button_frame.pack()
+
+        def do_continue():
+            dialog.destroy()
+
+        def do_reset():
+            nonlocal result
+            result = True
+            dialog.destroy()
+
+        ttk.Button(
+            button_frame,
+            text="Start New Event",
+            style="Warning.TButton",
+            command=do_reset,
+        ).pack(side="left", padx=(0, 8))
+
+        continue_btn = ttk.Button(
+            button_frame,
+            text="Continue Event",
+            command=do_continue,
+        )
+        continue_btn.pack(side="left")
+
+        # Safe defaults
+        continue_btn.focus_set()
+        dialog.bind("<Return>", lambda e: do_continue())
+        dialog.bind("<Escape>", lambda e: do_continue())
+        dialog.protocol("WM_DELETE_WINDOW", do_continue)
+
+        dialog.update_idletasks()
+        x = (
+            self.root.winfo_rootx()
+            + (self.root.winfo_width() - dialog.winfo_width()) // 2
+        )
+        y = (
+            self.root.winfo_rooty()
+            + (self.root.winfo_height() - dialog.winfo_height()) // 2
+        )
+        dialog.geometry(f"+{x}+{y}")
+
+        self.root.wait_window(dialog)
+        return result
+
     def update(
         self,
         current: str,
@@ -814,22 +900,23 @@ class DanceController:
 
         self.played = set()
 
-        if "--reset-log" in sys.argv:
-            log_path = Path(PLAYED_LOG_FILE)
-            if log_path.exists():
-                log_path.unlink()
-                print(success("\n✓ Played songs log reset for new event."))
-
-        if Path(PLAYED_LOG_FILE).exists():
+        log_path = Path(PLAYED_LOG_FILE)
+        if log_path.exists():
             try:
-                with open(PLAYED_LOG_FILE, encoding="utf8") as f:
+                with open(log_path, encoding="utf8") as f:
                     loaded = {line.strip() for line in f if line.strip()}
-                self.played.update(loaded)
-                print(
-                    success(
-                        f"\n✓ Loaded {len(loaded)} previously played songs from {PLAYED_LOG_FILE}"
-                    )
-                )
+
+                if loaded:
+                    if self.window.ask_reset_log(len(loaded)):
+                        log_path.unlink()
+                        print(success("\n✓ Played songs log reset for new event."))
+                    else:
+                        self.played.update(loaded)
+                        print(
+                            success(
+                                f"\n✓ Loaded {len(loaded)} previously played songs from {PLAYED_LOG_FILE}"
+                            )
+                        )
 
             except Exception as e:
                 print(error(f"Error: could not load played log: {e}"))
