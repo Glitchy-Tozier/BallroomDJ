@@ -43,14 +43,12 @@ FINAL_SONG = "Teddy Swims - Lose Control (Live)"
 MIN_SONG_PAUSE = defaultdict(
     # Default: how many songs must pass before a dance can repeat.
     # Should be smaller than the number of available song types
-    lambda: 6,
+    lambda: 7,
     # Custom settings: Specify which songs should show up more/less frequently than the default set above ↑
     {
-        "Langsamer Walzer": 7,
         "Paso Doble": 10,  # Higher = rarer
-        "Samba": 8,
         "Tango": 8,
-        "West Coast Swing": 3,  # Lower = more common
+        "West Coast Swing": 2,  # Lower = more common
         "Wiener Walzer": 9,
     },
 )
