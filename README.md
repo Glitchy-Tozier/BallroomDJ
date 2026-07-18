@@ -2,9 +2,9 @@
 
 A Python script that automatically plays dance music for social dance events.
 
-It randomly selects dances (e.g. Cha Cha, Tango, Waltz, West Coast Swing), chooses songs from predefined lists, and plays the matching audio files from your music library. The program includes loudness normalization, silence trimming, and a small control GUI.
+It randomly selects dances (e.g. Cha Cha, Tango, Waltz, West Coast Swing), chooses songs from predefined lists, and plays the matching audio files from your music library. The program includes loudness normalization, silence trimming, and a live control GUI.
 
-It was designed for mixed dance events that combine **ballroom/Latin dances** with **West Coast Swing (WCS)**.
+It was designed for mixed dance events that combine **ballroom/Latin dances** with **West Coast Swing (WCS)**, but can be used with any set of dance categories.
 
 ---
 
@@ -14,12 +14,18 @@ It was designed for mixed dance events that combine **ballroom/Latin dances** wi
   - Prevents the same dance type from repeating too often
   - Recently played dances are temporarily put on cooldown
 
-- **West Coast Swing support**
-  - Automatically plays **two WCS songs in a row**
+- **Configurable consecutive dances**
+  - Any dance category can be configured to play multiple songs in a row
+  - By default, **West Coast Swing** plays **two songs consecutively**
 
 - **Song history**
-  - Songs are never repeated during a run
-  - Previously played songs can optionally be excluded across runs
+  - Songs are never repeated during an event
+  - Previously played songs are remembered between runs
+  - At startup, choose whether to continue the previous event or start a new one, resetting your song history
+
+- **On-demand songs**
+  - Songs in the **On-Demand Songs** category are excluded from automatic scheduling
+  - They can be queued at any time from the control window
 
 - **Fuzzy song matching**
   - Matches the song names in the song list with audio files on disk
@@ -34,13 +40,15 @@ It was designed for mixed dance events that combine **ballroom/Latin dances** wi
 - **Live control window**
   - Pause / resume
   - Skip current song
-  - Queue final song
+  - Queue on-demand songs
+  - Queue the final song
+  - Seek using the progress bar
   - Shows:
     - current dance + song
     - next dance + song
     - previous dances + songs
-    - current progress bar
-    - empty categories
+    - playback progress
+    - empty dance categories
 
 ---
 
@@ -50,7 +58,7 @@ It was designed for mixed dance events that combine **ballroom/Latin dances** wi
 
 Songs are provided in a `.txt` file structured like this:
 
-```
+```text
 Cha Cha Cha
 Song A
 Song B
@@ -63,6 +71,13 @@ Song E
 West Coast Swing
 Song F
 Song G
+
+On-Demand Songs
+Special Song 1
+Special Song 2
+
+---
+Other notes that'll be ignored
 ```
 
 Rules:
@@ -70,7 +85,8 @@ Rules:
 - The **first line** of each block is the **dance category**
 - The following lines are **song names**
 - Categories are separated by a **blank line**
-- The file ends at ... the end of the file ... or the first line containing `---`.
+- Songs in the **On-Demand Songs** category are only played when manually queued
+- The file ends at the end of the file or the first line containing `---`
 
 ### Music Library
 
@@ -78,7 +94,7 @@ The script scans one or more directories recursively for audio files.
 
 Supported formats:
 
-```
+```text
 mp3
 wav
 flac
@@ -89,8 +105,10 @@ aac
 ```
 
 Song names from the list are matched **fuzzily** against:
+
 - filename
 - artist metadata
+- album metadata
 - title metadata
 
 ---
@@ -115,14 +133,16 @@ Edit the configuration section at the top of the script.
 
 Important settings:
 
-| Variable          | Description                                             |
-| ----------------- | ------------------------------------------------------- |
-| `SONG_LIST_FILE`  | Path to the song list text file                         |
-| `MUSIC_ROOTS`     | Directories that contain your music                     |
-| `FINAL_SONG`      | Optional closing song                                   |
-| `WCS_NAME`        | Name of the WCS category                                |
-| `COOLDOWN_ZERO`   | Number of songs before a dance becomes selectable again |
-| `TARGET_LOUDNESS` | Loudness normalization target (LUFS)                    |
+| Variable                   | Description                                       |
+| -------------------------- | ------------------------------------------------- |
+| `SONG_LIST_FILE`           | Path to the song list                             |
+| `MUSIC_ROOTS`              | Directories containing your music                 |
+| `FINAL_SONG`               | Optional closing song                             |
+| `ON_DEMAND_SONGS_CATEGORY` | Category containing manually queued songs         |
+| `MIN_SONG_PAUSE`           | Minimum number of songs before a dance can repeat |
+| `SONG_CATEGORY_REPEATS`    | Number of consecutive songs per dance category    |
+| `TARGET_LOUDNESS`          | Loudness normalization target (LUFS)              |
+| `PREPARE_AHEAD`            | Number of songs prepared in advance               |
 
 ---
 
@@ -132,41 +152,27 @@ Start the player:
 
 ```bash
 source venv/bin/activate # If necessary
-python ballroom_dj.py --reset-log
+python ballroom_dj.py
 ```
 
-The GUI window will appear and the first song will be **paused** until you press play.
+If songs from a previous event are found, the program asks whether to:
+
+- **Continue Event** (keep previously played songs excluded)
+- **Start New Event** (clear the played-song log)
+
+The first song is loaded **paused** until you press **Play**.
 
 ---
 
-### Command Line Options: `--reset-log`
+## Controls
 
-Songs are written to `played_songs.log` so they won't repeat in future runs.
-
-`--reset-log` clears the `played_songs.log` file so songs can be played again.
-
-```bash
-python ballroom_dj.py --reset-log # Start BallroomDJ with all songs available
-```
-
-Usually you want to use this parameter. If your PC crashes mid-event, resume _without_ this command line parameter to avoid replaying previous soungs:
-
-```bash
-python ballroom_dj.py # Don't reset log -> continue where you left off last time
-```
-
----
-
-### Controls
-
-The control window provides:
-
-| Button           | Action                              |
-| ---------------- | ----------------------------------- |
-| **Play / Pause** | Pause or resume playback            |
-| **Skip**         | Skip the current song               |
-| **Final Song**   | Queue the configured final song     |
-| **Exit**         | Stop playback and close the program |
+| Button           | Action                                             |
+| ---------------- | -------------------------------------------------- |
+| **Play / Pause** | Pause or resume playback                           |
+| **Skip**         | Skip the current song                              |
+| **Queue Song**   | Queue a song from the **On-Demand Songs** category |
+| **Final Song**   | Queue the configured final song                    |
+| **Exit**         | Stop playback and close the program                |
 
 ---
 

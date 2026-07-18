@@ -1,11 +1,15 @@
+import itertools
 import os
 import re
 import random
+import shutil
 import sys
+import tempfile
 import threading
 import time
 import unicodedata
 from collections import deque, defaultdict
+from dataclasses import dataclass, field
 from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, messagebox
@@ -40,6 +44,11 @@ MUSIC_ROOTS = [  # Folders where audio files are searched recursively
 # Played at the very end (None to disable)
 FINAL_SONG = "Teddy Swims - Lose Control (Live)"
 
+# Category in SONG_LIST_FILE whose songs are NOT auto-scheduled, but can be
+# manually queued via the "Queue Song" button.  (If a title from this category
+# also appears under a real dance, it can still show up there naturally.)
+ON_DEMAND_SONGS_CATEGORY = "On-Demand Songs"
+
 MIN_SONG_PAUSE = defaultdict(
     # Default: how many songs must pass before a dance can repeat.
     # Should be smaller than the number of available song types
@@ -65,7 +74,11 @@ SONG_CATEGORY_REPEATS = defaultdict(
 
 TARGET_LOUDNESS = -14.0  # Normalize all songs to this loudness (LUFS)
 
-TEMP_FILE = "temp_song.wav"  # Temporary file used for playback (processed audio)
+# How many upcoming songs the background worker keeps fully prepared and ready.
+PREPARE_AHEAD = 10
+
+# Directory where prepared (normalized/trimmed) wav files are written.
+PREPARED_DIR = Path(tempfile.mkdtemp(prefix="dance_player_"))
 
 TRIM_SILENCE = True  # Automatically remove silence at start/end of songs
 SILENCE_THRESHOLD_DB = -50  # What counts as silence (lower = stricter)
@@ -218,10 +231,6 @@ class SongEntry:
         else:
             self.full = self.title
 
-        # combined_o = " ".join([self.artist, self.title, self.path.name])
-        # cleaned_o = clean_for_matching(combined_o)
-        # print(normalize_unicode(cleaned_o))
-
         combined = " ".join(
             [
                 self.artist,
@@ -231,7 +240,6 @@ class SongEntry:
             ]
         )
         cleaned = clean_for_matching(combined)
-        # print(normalize_unicode(cleaned))
 
         self.search_text = normalize_unicode(cleaned)
         self.token_set = set(self.search_text.split())
@@ -375,7 +383,41 @@ def normalize_audio(path: Path) -> tuple[AudioSegment, float, float]:
 
 
 # -------------------------------------------
-# DANCE SELECTION
+# PLAYLIST ITEM
+# -------------------------------------------
+
+# Global, thread-safe (CPython) unique id source for playlist items.  Guarantees
+# that every item (including ones inserted at runtime) gets a distinct temp-file
+# name, so no two prepared wavs ever collide.
+_uid_counter = itertools.count()
+
+
+@dataclass
+class PlaylistItem:
+    dance: str
+    song: str
+    path: Path | None
+    uid: int = field(default_factory=lambda: next(_uid_counter))
+
+    # --- preparation state (written by the PreparationWorker) ---
+    prepared: bool = False
+    prepared_file: Path | None = None
+    duration_ms: int = 0
+    loudness: float | None = None
+    gain_db: float = 0.0
+
+    # --- playback / role state ---
+    played: bool = False
+    skip: bool = False  # set when the item can't be prepared and must be stepped over
+    is_custom: bool = False  # queued via the "Queue Song" button
+    is_final: bool = False  # last song; playback stops after it
+
+    def display(self) -> str:
+        return f"{self.dance} — {self.song}"
+
+
+# -------------------------------------------
+# DANCE SELECTION  (probability logic — unchanged)
 # -------------------------------------------
 
 
@@ -387,18 +429,15 @@ class DanceSelector:
 
     def _build_weights(self, available_categories: list[str]) -> list[float]:
         weights = []
-        # songs_passed_since_list = [] # For debugging
 
         for category in available_categories:
             min_pause = MIN_SONG_PAUSE[category]
             songs_passed_since = self.songs_passed_since[category]
-            # songs_passed_since_list.append(songs_passed_since) # For debugging
 
             # No negative weights allowed!
             weight = max(songs_passed_since - min_pause, 0)
             weights.append(weight)
 
-        # pprint([f"{a}: passed_since: {b} -> {c})" for a, b, c in (zip(available_categories, songs_passed_since_list, weights))]) # For debugging
         return weights
 
     def _weighted_pick(self, categories: list[str], weights: list[float]) -> str:
@@ -432,6 +471,224 @@ class DanceSelector:
 
 
 # -------------------------------------------
+# PLAYLIST BUILDER
+# -------------------------------------------
+
+
+class PlaylistBuilder:
+    """Generates the FULL planned playlist up front.
+
+    The On-Demand-Songs category is excluded from auto-scheduling.
+    `already_played` (loaded from the log) is used only to seed a local `used`
+    set, so the caller's persistent played-log is never touched here."""
+
+    def __init__(
+        self,
+        categories: dict[str, list[str]],
+        matcher: SongMatcher,
+        selector: DanceSelector,
+        already_played: set[str],
+    ) -> None:
+        self.categories = categories
+        self.matcher = matcher
+        self.selector = selector
+        self.already_played = already_played
+
+    def _schedulable_dances(self, used: set[str]) -> list[str]:
+        """Dances (excluding the on-demand category) that still have an unused song."""
+        return [
+            d
+            for d in self.categories
+            if d != ON_DEMAND_SONGS_CATEGORY
+            and any(s not in used and s != FINAL_SONG for s in self.categories[d])
+        ]
+
+    def _take_song(self, dance: str, used: set[str]) -> str | None:
+        """Pick a random unused song of `dance` that actually matches a file.
+        Consumes (marks used) any songs it tries, so unmatched ones don't loop."""
+        while True:
+            candidates = [
+                s for s in self.categories[dance] if s not in used and s != FINAL_SONG
+            ]
+            if not candidates:
+                return None
+
+            song = random.choice(candidates)
+            used.add(song)
+
+            if self.matcher.get(song) is None:
+                print(error(f"Skipping '{song}' (no matched audio file)"))
+                continue
+
+            return song
+
+    def build(self) -> tuple[list[PlaylistItem], list[str]]:
+        used = set(self.already_played)
+        playlist: list[PlaylistItem] = []
+
+        while True:
+            available = self._schedulable_dances(used)
+            if not available:
+                break
+
+            dance = self.selector.peek(available)
+            if dance is None:  # defensive fallback; peek shouldn't return None here
+                dance = random.choice(available)
+            self.selector.commit(dance)
+
+            repeat = SONG_CATEGORY_REPEATS[dance]
+            for _ in range(repeat):
+                song = self._take_song(dance, used)
+                if song is None:
+                    break
+                playlist.append(
+                    PlaylistItem(dance=dance, song=song, path=self.matcher.get(song))
+                )
+
+        # Final song lives at the very end of the plan by default, so the normal
+        # "play everything, then final, then close" flow needs no special-casing.
+        if FINAL_SONG:
+            final_path = self.matcher.get(FINAL_SONG)
+            if final_path is not None:
+                playlist.append(
+                    PlaylistItem(
+                        dance="Final Dance",
+                        song=FINAL_SONG,
+                        path=final_path,
+                        is_final=True,
+                    )
+                )
+
+        planned_dances = {it.dance for it in playlist if not it.is_final}
+        empty_categories = [
+            c
+            for c in self.categories
+            if c != ON_DEMAND_SONGS_CATEGORY and c not in planned_dances
+        ]
+
+        print(success(f"\n✓ Planned playlist: {len(playlist)} songs"))
+        return playlist, empty_categories
+
+
+# -------------------------------------------
+# PREPARATION WORKER
+# -------------------------------------------
+
+
+class PreparationWorker(threading.Thread):
+    """Background thread that keeps items [current_index .. current_index+PREPARE_AHEAD]
+    normalized, trimmed and exported to disk, so playback never has to wait."""
+
+    def __init__(
+        self, controller: "DanceController", prepare_ahead: int = PREPARE_AHEAD
+    ) -> None:
+        super().__init__(daemon=True)
+        self.controller = controller
+        self.prepare_ahead = prepare_ahead
+        self.wake = threading.Event()
+        self._stop = False
+
+    def notify(self) -> None:
+        """Wake the worker (call after mutating the playlist / advancing)."""
+        self.wake.set()
+
+    def stop(self) -> None:
+        self._stop = True
+        self.wake.set()
+
+    def run(self) -> None:
+        while not self._stop:
+            item = self._next_to_prepare()
+            if item is None:
+                self.wake.wait(timeout=0.3)
+                self.wake.clear()
+                continue
+            self._prepare(item)
+
+    def _next_to_prepare(self) -> PlaylistItem | None:
+        with self.controller.lock:
+            idx = self.controller.current_index
+            playlist = self.controller.playlist
+            window_end = min(len(playlist), idx + self.prepare_ahead + 1)
+            for i in range(idx, window_end):
+                it = playlist[i]
+                if not it.prepared and not it.skip:
+                    return it
+        return None
+
+    def _prepare(self, item: PlaylistItem) -> None:
+        # Heavy work happens OUTSIDE the lock.  path/uid are stable for this item.
+        try:
+            if item.path is None:
+                raise FileNotFoundError(f"no matched audio for '{item.song}'")
+
+            audio, loudness, gain_db = normalize_audio(item.path)
+            audio = trim_silence(audio)
+            duration_ms = len(audio)
+
+            out = PREPARED_DIR / f"prepared_{item.uid}.wav"
+            audio.export(out, format="wav")
+
+            item.duration_ms = duration_ms
+            item.loudness = loudness
+            item.gain_db = gain_db
+            item.prepared_file = out
+            item.prepared = True  # set LAST: signals "fully ready" to the player
+            print(success(f"  ⚙ Prepared: {item.song}"))
+
+        except Exception as exc:
+            self._handle_failure(item, exc)
+
+    def _handle_failure(self, item: PlaylistItem, exc: Exception) -> None:
+        """A file was unreadable / unmatched.  Try to pull the last still-unprepared
+        song of the same dance forward into this slot; otherwise flag it to be skipped."""
+        print(error(f"⚠ Could not prepare '{item.song}': {exc}"))
+        with self.controller.lock:
+            playlist = self.controller.playlist
+            try:
+                idx = playlist.index(item)
+            except ValueError:
+                return  # item was removed meanwhile (e.g. final-song truncation)
+
+            if idx <= self.controller.current_index:
+                # Too late to reshuffle around the current item — just step over it.
+                item.skip = True
+                item.prepared = True
+                print(warning("↪ Marked current slot to be skipped"))
+                return
+
+            donor_idx = None
+            for j in range(len(playlist) - 1, idx, -1):
+                c = playlist[j]
+                if (
+                    c.dance == item.dance
+                    and not c.played
+                    and not c.prepared
+                    and not c.skip
+                    and not c.is_custom
+                    and not c.is_final
+                ):
+                    donor_idx = j
+                    break
+
+            if donor_idx is not None:
+                donor = playlist[donor_idx]
+                item.song = donor.song
+                item.path = donor.path
+                item.uid = next(_uid_counter)
+                item.prepared = False
+                item.prepared_file = None
+                del playlist[donor_idx]
+                print(warning(f"↪ Replaced with '{item.song}' (moved up from later)"))
+            else:
+                item.skip = True
+                item.prepared = True
+                print(warning("↪ No replacement available; skipping slot"))
+
+        self.wake.set()
+
+
+# -------------------------------------------
 # MUSIC PLAYER
 # -------------------------------------------
 
@@ -444,18 +701,30 @@ class MusicPlayer:
             size=-16,
             channels=2,
         )
+        # `paused` is the user's *persistent* preference — it survives across song
+        # changes, so a DJ can pause and then skip through several intros silently.
         self.paused = False
+        self._skip = False  # set by skip(); lets wait() break out even while paused
         # absolute position in ms (updated on every play/start)
         self.position_offset = 0
+        self.current_file: str | None = None
 
-    def play(self, path: str, start: float = 0.0) -> None:
-        """Start (or restart) playback. start is in seconds from beginning of song."""
-        pygame.mixer.music.load(path)
+    def play(self, path: str | Path, start: float = 0.0) -> None:
+        """Start playback of `path`. If the player is currently paused, the new song
+        is loaded but held at the start, so the pause state carries over."""
+        self.current_file = str(path)
+        pygame.mixer.music.load(self.current_file)
         pygame.mixer.music.play(start=start)
         self.position_offset = int(start * 1000)
+        if self.paused:
+            pygame.mixer.music.pause()  # keep it paused at the beginning
 
     def wait(self) -> None:
         while True:
+            if self._skip:
+                self._skip = False
+                break
+
             if self.paused:
                 time.sleep(0.2)
                 continue
@@ -476,6 +745,9 @@ class MusicPlayer:
         self.paused = not self.paused
 
     def skip(self) -> None:
+        # Signal wait() to move on WITHOUT touching `paused`, so the pause
+        # preference is preserved for the next song.
+        self._skip = True
         pygame.mixer.music.stop()
 
     def get_pos(self) -> int:
@@ -489,15 +761,16 @@ class MusicPlayer:
             return -1
 
     def seek(self, seconds: float) -> None:
-        """Reliable seek: stop, restart from exact position, preserve pause state.
-        get_pos() is now always correct immediately thanks to position_offset."""
+        """Reliable seek: stop, restart current file from exact position, preserve pause."""
+        if self.current_file is None:
+            return
         if seconds < 0:
             seconds = 0.0
 
         was_paused = self.paused
-        self.skip()  # stop
+        pygame.mixer.music.stop()
 
-        pygame.mixer.music.load(TEMP_FILE)
+        pygame.mixer.music.load(self.current_file)
         pygame.mixer.music.play(start=seconds)
         self.position_offset = int(seconds * 1000)
 
@@ -624,15 +897,12 @@ class ControlWindow:
             command=self.controller.skip,
         ).grid(row=0, column=1, sticky="nsew", padx=5, pady=5)
 
-        self.final_btn = ttk.Button(
+        self.queue_btn = ttk.Button(
             button_frame,
-            text="🎵 Final Song",
-            command=self.controller.play_final,
+            text="🎵 Queue Song",
+            command=self.open_queue_menu,
         )
-        self.final_btn.grid(row=0, column=2, sticky="nsew", padx=5, pady=5)
-
-        if FINAL_SONG is None:
-            self.final_btn.config(state="disabled")
+        self.queue_btn.grid(row=0, column=2, sticky="nsew", padx=5, pady=5)
 
         ttk.Button(
             button_frame,
@@ -640,10 +910,13 @@ class ControlWindow:
             command=self.on_close,
         ).grid(row=0, column=3, sticky="nsew", padx=5, pady=5)
 
+        if not self.controller.has_queueable():
+            self.queue_btn.config(state="disabled")
+
         self.current_duration_ms = 0
         self.updating_progress = False
 
-        # ---------- Startup dialog ----------
+        # ---------- styles ----------
         self.warning_style = ttk.Style()
         self.warning_style.configure(
             "Warning.TButton",
@@ -661,6 +934,8 @@ class ControlWindow:
                 ("pressed", "white"),
             ],
         )
+
+    # ---------- startup dialog ----------
 
     def ask_reset_log(self, log_size: int) -> bool:
         dialog = tk.Toplevel(self.root)
@@ -728,6 +1003,135 @@ class ControlWindow:
 
         self.root.wait_window(dialog)
         return result
+
+    # ---------- queue-song picker ----------
+
+    def open_queue_menu(self) -> None:
+        songs = self.controller.get_on_demand_songs()
+        final_available = self.controller.final_available()
+
+        if not songs and not final_available:
+            messagebox.showinfo("Queue Song", "There are no songs available to queue.")
+            return
+
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Queue Song")
+        dialog.resizable(False, False)
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        frame = ttk.Frame(dialog, padding=16)
+        frame.pack(fill="both", expand=True)
+
+        ttk.Label(
+            frame,
+            text="Choose a song to play next.\nQueued or already-played songs are greyed out.",
+            justify="center",
+        ).pack(pady=(0, 12))
+
+        LIST_WIDTH = 380
+        ROW_H = 34  # approximate height of one ttk button row
+
+        # Everything queueable lives in one scrollable list (scrollbar only appears
+        # if the content overflows). The final song is the last entry.
+        total_rows = len(songs) + (1 if final_available else 0)
+        viewport_h = min(10 * ROW_H, max(3, total_rows) * ROW_H) + (
+            10 if (songs and final_available) else 0
+        )
+
+        list_frame = ttk.Frame(frame)
+        list_frame.pack(fill="both", expand=True)
+
+        canvas = tk.Canvas(
+            list_frame,
+            width=LIST_WIDTH,
+            height=viewport_h,
+            borderwidth=0,
+            highlightthickness=0,
+        )
+        vsb = ttk.Scrollbar(list_frame, orient="vertical", command=canvas.yview)
+        inner = ttk.Frame(canvas)
+        inner_id = canvas.create_window((0, 0), window=inner, anchor="nw")
+        canvas.configure(yscrollcommand=vsb.set)
+        canvas.pack(side="left", fill="both", expand=True)
+
+        def _scrollable() -> bool:
+            return inner.winfo_reqheight() > canvas.winfo_height()
+
+        def _on_inner(_e=None) -> None:
+            canvas.configure(scrollregion=canvas.bbox("all"))
+            if _scrollable():
+                vsb.pack(side="right", fill="y")
+            else:
+                vsb.pack_forget()
+
+        def _on_canvas(e) -> None:
+            canvas.itemconfigure(inner_id, width=e.width)
+
+        inner.bind("<Configure>", _on_inner)
+        canvas.bind("<Configure>", _on_canvas)
+
+        # Mouse-wheel scrolling, active only while the cursor is over the list.
+        def _on_wheel(e) -> None:
+            if not _scrollable():
+                return
+            delta = -1 if getattr(e, "num", None) == 4 or e.delta > 0 else 1
+            canvas.yview_scroll(delta, "units")
+
+        def _bind_wheel(_e=None) -> None:
+            canvas.bind_all("<MouseWheel>", _on_wheel)
+            canvas.bind_all("<Button-4>", _on_wheel)
+            canvas.bind_all("<Button-5>", _on_wheel)
+
+        def _unbind_wheel(_e=None) -> None:
+            canvas.unbind_all("<MouseWheel>")
+            canvas.unbind_all("<Button-4>")
+            canvas.unbind_all("<Button-5>")
+
+        canvas.bind("<Enter>", _bind_wheel)
+        canvas.bind("<Leave>", _unbind_wheel)
+        dialog.bind("<Destroy>", lambda e: _unbind_wheel())
+
+        for song in songs:
+            disabled = self.controller.is_song_disabled(song)
+            ttk.Button(
+                inner,
+                text=song,
+                state="disabled" if disabled else "normal",
+                command=lambda s=song: self._queue_on_demand_and_close(dialog, s),
+            ).pack(fill="x", pady=1)
+
+        # Final song: last item in the list, warning-styled, closes the app afterwards.
+        if final_available:
+            ttk.Button(
+                inner,
+                text=f"FINAL SONG:   {FINAL_SONG}",
+                style="Warning.TButton",
+                command=lambda: self._queue_final_and_close(dialog),
+            ).pack(fill="x", pady=1)
+
+        ttk.Button(frame, text="Cancel", command=dialog.destroy).pack(pady=(14, 0))
+
+        dialog.update_idletasks()
+        x = (
+            self.root.winfo_rootx()
+            + (self.root.winfo_width() - dialog.winfo_width()) // 2
+        )
+        y = (
+            self.root.winfo_rooty()
+            + (self.root.winfo_height() - dialog.winfo_height()) // 2
+        )
+        dialog.geometry(f"+{x}+{y}")
+
+    def _queue_on_demand_and_close(self, dialog: tk.Toplevel, song: str) -> None:
+        dialog.destroy()
+        self.controller.queue_on_demand_song(song)
+
+    def _queue_final_and_close(self, dialog: tk.Toplevel) -> None:
+        dialog.destroy()
+        self.controller.play_final()
+
+    # ---------- main UI update ----------
 
     def update(
         self,
@@ -832,9 +1236,7 @@ class ControlWindow:
             self.elapsed_label.config(text="00:00")
 
     def _on_progress_click(self, event) -> None:
-        """Handle left-click or drag on the progress bar to seek.
-        Provides instant visual feedback + calls the player through the controller.
-        Works while paused (including the very first song) and respects final-song queuing."""
+        """Left-click / drag on the progress bar to seek, with instant feedback."""
         if self.current_duration_ms <= 0:
             return
 
@@ -847,22 +1249,24 @@ class ControlWindow:
         new_pos_ms = int(fraction * self.current_duration_ms)
         new_pos_seconds = new_pos_ms / 1000.0
 
-        # Instant visual feedback (progress + elapsed time)
         elapsed_s = new_pos_ms // 1000
         self.elapsed_label.config(text=f"{elapsed_s // 60:02d}:{elapsed_s % 60:02d}")
         self.progress.config(value=fraction * 100)
 
-        # Delegate seek (keeps design consistent with pause/skip)
         self.controller.seek(new_pos_seconds)
 
     def update_pause_button(self, paused: bool) -> None:
+        self.root.after(0, self._update_pause_button, paused)
+
+    def _update_pause_button(self, paused: bool) -> None:
         if paused:
             self.pause_btn.config(text="▶ Continue")
         else:
             self.pause_btn.config(text="⏸ Pause")
 
     def mark_final_requested(self) -> None:
-        self.final_btn.config(
+        # Once the final song is next, don't allow queueing anything in front of it.
+        self.queue_btn.config(
             text="🎵 Final Song Queued",
             state="disabled",
         )
@@ -872,9 +1276,17 @@ class ControlWindow:
         if FINAL_SONG:
             self.next_label.config(text=f"FINAL SONG:  {FINAL_SONG}")
 
+    def refresh_queue_button(self) -> None:
+        """Disable the Queue Song button once nothing is left to queue."""
+        if self.controller.final_queued:
+            return  # already renamed/disabled by mark_final_requested
+        state = "normal" if self.controller.has_queueable() else "disabled"
+        self.queue_btn.config(state=state)
+
     def on_close(self) -> None:
         if messagebox.askyesno("Exit", "Stop playback and close the program?"):
             pygame.mixer.music.stop()
+            self.controller.cleanup()
             self.root.destroy()
             sys.exit()
 
@@ -886,6 +1298,8 @@ class ControlWindow:
 
 class DanceController:
     def __init__(self) -> None:
+        self.lock = threading.RLock()
+
         self.categories = load_song_list(SONG_LIST_FILE)
         self.audio_files = scan_audio_files(MUSIC_ROOTS)
 
@@ -896,10 +1310,14 @@ class DanceController:
         self.matcher = SongMatcher(all_songs, self.audio_files)
         self.selector = DanceSelector(self.categories)
         self.player = MusicPlayer()
+
+        # State the GUI queries during its own construction must exist first.
+        self.played: set[str] = set()
+        self.final_queued = False
+
         self.window = ControlWindow(self)
 
-        self.played = set()
-
+        # ---- played log (unchanged semantics) ----
         log_path = Path(PLAYED_LOG_FILE)
         if log_path.exists():
             try:
@@ -921,18 +1339,61 @@ class DanceController:
             except Exception as e:
                 print(error(f"Error: could not load played log: {e}"))
 
-        self.force_final = False
-        self.next_item = None
-        self.song_history = deque(maxlen=HISTORY_LENGTH)
+        # ---- build the full plan up front ----
+        builder = PlaylistBuilder(
+            self.categories,
+            self.matcher,
+            self.selector,
+            self.played,
+        )
+        self.playlist, self.empty_categories = builder.build()
+
+        self.current_index = 0
+        self.current_item: PlaylistItem | None = None
+        self.song_history: deque[tuple[str, str]] = deque(maxlen=HISTORY_LENGTH)
         self.first_song = True
 
-    def get_available_dances(self) -> list[str]:
-        """Return only dances that still have unplayed songs."""
+        self.worker = PreparationWorker(self)
+
+    # ---------- lifecycle ----------
+
+    def start(self) -> None:
+        self.worker.start()
+        threading.Thread(target=self.run, daemon=True).start()
+
+    def cleanup(self) -> None:
+        self.worker.stop()
+        shutil.rmtree(PREPARED_DIR, ignore_errors=True)
+
+    # ---------- on-demand-song helpers (used by GUI) ----------
+
+    def get_on_demand_songs(self) -> list[str]:
+        """On-demand songs (in file order) that actually matched an audio file."""
         return [
-            d
-            for d in self.categories
-            if any(s not in self.played and s != FINAL_SONG for s in self.categories[d])
+            s
+            for s in self.categories.get(ON_DEMAND_SONGS_CATEGORY, [])
+            if self.matcher.get(s) is not None
         ]
+
+    def is_song_disabled(self, song: str) -> bool:
+        """Greyed out only once actually played — same rule as regular songs.
+        Accidental re-queueing is prevented in queue_on_demand_song() instead."""
+        return song in self.played
+
+    def final_available(self) -> bool:
+        """Whether the Final Song can still be offered in the queue menu."""
+        return (
+            FINAL_SONG is not None
+            and not self.final_queued
+            and self.matcher.get(FINAL_SONG) is not None
+        )
+
+    def has_queueable(self) -> bool:
+        if self.final_available():
+            return True
+        return any(not self.is_song_disabled(s) for s in self.get_on_demand_songs())
+
+    # ---------- playback controls (used by GUI) ----------
 
     def pause(self) -> None:
         self.player.pause()
@@ -940,62 +1401,97 @@ class DanceController:
 
     def skip(self) -> None:
         self.player.skip()
+        self.window.update_pause_button(self.player.paused)
 
     def seek(self, seconds: float) -> None:
-        """Delegate seeking to the MusicPlayer (keeps all audio control in one place)."""
         self.player.seek(seconds)
 
+    # ---------- queueing (list edits, no flags) ----------
+
+    def queue_on_demand_song(self, song: str) -> None:
+        path = self.matcher.get(song)
+        if path is None:
+            print(warning(f"Cannot queue '{song}' (no matched audio file)"))
+            return
+
+        item = PlaylistItem(
+            dance=ON_DEMAND_SONGS_CATEGORY, song=song, path=path, is_custom=True
+        )
+        removed: list[PlaylistItem] = []
+        with self.lock:
+            insert_at = min(self.current_index + 1, len(self.playlist))
+            self.playlist.insert(insert_at, item)
+
+            # Prevent accidental duplicates: drop any *later* occurrences of the
+            # same song (a previously-queued copy, or one scheduled under a real
+            # dance). The just-inserted copy at insert_at is kept.
+            i = insert_at + 1
+            while i < len(self.playlist):
+                other = self.playlist[i]
+                if other.song == song and not other.is_final:
+                    removed.append(self.playlist.pop(i))
+                else:
+                    i += 1
+
+        for r in removed:
+            if r.prepared_file is not None:
+                try:
+                    Path(r.prepared_file).unlink(missing_ok=True)
+                except Exception:
+                    pass
+
+        self.worker.notify()
+        print(success(f"✚ Queued: {song}"))
+        self.window.refresh_queue_button()
+        if self.current_item is not None:
+            self._push_ui_update(self.current_item)
+
     def play_final(self) -> None:
-        if FINAL_SONG and messagebox.askyesno(
+        if not FINAL_SONG:
+            return
+        if not messagebox.askyesno(
             "Final Song",
             f"Play the final song '{FINAL_SONG}' next?\n\nAfterwards, the app will be closed.",
         ):
-            self.force_final = True
-            self.window.mark_final_requested()  # Update button state
-            self.window.show_final_preview()  # Immediately update preview text
+            return
 
-    def choose_song(self, dance: str) -> str | None:
-        songs = [
-            s
-            for s in self.categories[dance]
-            if s not in self.played and s != FINAL_SONG
-        ]
-        if not songs:
-            return None
-        song = random.choice(songs)
-        self.played.add(song)
-        return song
+        with self.lock:
+            final_item = next((it for it in self.playlist if it.is_final), None)
+            if final_item is None:
+                fpath = self.matcher.get(FINAL_SONG)
+                if fpath is not None:
+                    final_item = PlaylistItem(
+                        dance="Final Dance",
+                        song=FINAL_SONG,
+                        path=fpath,
+                        is_final=True,
+                    )
 
-    def pick_next(self, available_categories: list[str]) -> tuple[str, str] | None:
-        """Robust next picker that guarantees a valid dance+song."""
-        if not available_categories:
-            return None
+            if final_item is not None:
+                kept = [
+                    it
+                    for it in self.playlist[: self.current_index + 1]
+                    if not it.is_final
+                ]
+                self.playlist = kept + [final_item]
+                queued = True
+            else:
+                queued = False
 
-        for _ in range(9):  # retry a few times
-            dance = self.selector.peek(available_categories)
-            if dance is None and available_categories:
-                dance = random.choice(available_categories)
+        if not queued:
+            messagebox.showwarning(
+                "Final Song", "The final song could not be found / matched."
+            )
+            return
 
-            songs = [
-                s
-                for s in self.categories[dance]
-                if s not in self.played and s != FINAL_SONG
-            ]
-            if songs:
-                song = random.choice(songs)
-                return (dance, song)
+        self.final_queued = True
+        self.worker.notify()
+        self.window.mark_final_requested()
+        self.window.show_final_preview()
+        if self.current_item is not None:
+            self._push_ui_update(self.current_item)
 
-        # Final fallback
-        for dance in available_categories:
-            songs = [
-                s
-                for s in self.categories[dance]
-                if s not in self.played and s != FINAL_SONG
-            ]
-            if songs:
-                return (dance, random.choice(songs))
-
-        return None
+    # ---------- log ----------
 
     def _save_played_log(self) -> None:
         try:
@@ -1005,172 +1501,112 @@ class DanceController:
         except Exception as e:
             print(warning(f"Warning: could not save played log: {e}"))
 
+    # ---------- internal helpers ----------
+
+    def _advance(self) -> None:
+        with self.lock:
+            prev = (
+                self.playlist[self.current_index]
+                if self.current_index < len(self.playlist)
+                else None
+            )
+            self.current_index += 1
+
+        if prev is not None and prev.prepared_file is not None:
+            try:
+                Path(prev.prepared_file).unlink(missing_ok=True)
+            except Exception:
+                pass
+
+        self.worker.notify()
+
+    def _push_ui_update(self, current_item: PlaylistItem) -> None:
+        with self.lock:
+            idx = self.current_index
+            nxt = self.playlist[idx + 1] if idx + 1 < len(self.playlist) else None
+
+        next_is_final = bool(nxt and nxt.is_final)
+        next_display = nxt.display() if nxt else ""
+
+        self.window.update(
+            f"{current_item.dance} - {current_item.song}",
+            next_display,
+            self.empty_categories,
+            list(self.song_history),
+            current_item.duration_ms,
+            final_queued=next_is_final,
+        )
+
+    def _log_now_playing(self, item: PlaylistItem) -> None:
+        divider()
+        label = "Final Song" if item.is_final else "Playing"
+        print(f"▶ {label}: {bold(item.dance)}")
+        print(f"   Song: {bold(item.song)}")
+        if item.path is not None:
+            print(f"   File: {item.path.name}")
+        dur_s = int(round(item.duration_ms / 1000.0))
+        print(f"   Length: {dur_s // 60}:{dur_s % 60:02d}")
+        if (
+            item.loudness is not None
+            and not np.isnan(item.loudness)
+            and not np.isinf(item.loudness)
+        ):
+            print(
+                f"   Loudness: {item.loudness:.1f} LUFS → applied {item.gain_db:+.1f} dB"
+            )
+        divider()
+
+    # ---------- main playback loop ----------
+
     def run(self) -> None:
         while True:
-            available_categories = self.get_available_dances()
-            empty_categories = [
-                c for c in self.categories if c not in available_categories
-            ]
+            with self.lock:
+                if self.current_index >= len(self.playlist):
+                    break
+                item = self.playlist[self.current_index]
 
-            if not available_categories:
+            if item.skip:
+                self._advance()
+                continue
+
+            # Make sure the current item is prepared before playing.
+            self.worker.notify()
+            while not item.prepared and not item.skip:
+                time.sleep(0.05)
+
+            if item.skip:
+                self._advance()
+                continue
+
+            # First song starts paused (as before) — only happens once. Setting the
+            # flag *before* play() means the song loads already-paused (no audio blip),
+            # and the persistent-pause model carries it forward.
+            if self.first_song:
+                self.first_song = False
+                self.player.paused = True
+                self.window.update_pause_button(True)
+
+            self.current_item = item
+            self._log_now_playing(item)
+            self._push_ui_update(item)
+
+            self.player.play(item.prepared_file)
+            self.player.wait()
+
+            # Finished (or skipped via the Skip button).
+            item.played = True
+            with self.lock:
+                self.played.add(item.song)
+            self._save_played_log()
+            self.song_history.appendleft((item.dance, item.song))
+
+            is_final = item.is_final
+            self._advance()
+            if is_final:
                 break
-
-            # Get or refresh next_item
-            if (
-                self.next_item is None
-                or self.next_item[0] not in available_categories
-                or self.next_item[1] in self.played
-            ):
-                self.next_item = self.pick_next(available_categories)
-
-            if self.next_item is None:
-                dance = self.selector.peek(available_categories)
-                self.selector.commit(dance)
-            else:
-                dance = self.next_item[0]
-                self.selector.commit(dance)
-
-            if dance is None or dance not in available_categories:
-                available_categories = self.get_available_dances()
-                if available_categories:
-                    dance = self.selector.peek(available_categories)
-                    self.selector.commit(dance)
-                else:
-                    break
-
-            repeat = SONG_CATEGORY_REPEATS[dance]
-
-            for repeat_idx in range(repeat):
-                if (
-                    self.next_item
-                    and self.next_item[0] == dance
-                    and self.next_item[1] not in self.played
-                ):
-                    song = self.next_item[1]
-                    self.played.add(song)
-                else:
-                    song = self.choose_song(dance)
-
-                if song is None:
-                    break
-
-                path = self.matcher.get(song)
-                if path is None:
-                    print(error(f"Skipping '{song}' (no matched audio file)"))
-                    continue
-
-                audio, loudness, gain_db = normalize_audio(path)
-                audio = trim_silence(audio)
-                duration_ms = len(audio)
-                audio.export(TEMP_FILE, format="wav")
-
-                # Prepare next preview
-                available_after = self.get_available_dances()
-
-                if repeat_idx == repeat - 1:
-                    self.next_item = self.pick_next(available_after)
-                else:
-                    # WCS second song (same dance)
-                    songs = [
-                        s
-                        for s in self.categories[dance]
-                        if s not in self.played and s != FINAL_SONG
-                    ]
-                    if songs:
-                        self.next_item = (dance, random.choice(songs))
-                    else:
-                        self.next_item = self.pick_next(available_after)
-
-                next_display = (
-                    f"{self.next_item[0]} — {self.next_item[1]}"
-                    if self.next_item
-                    else ""
-                )
-
-                self.window.update(
-                    f"{dance} - {song}",
-                    next_display,
-                    empty_categories,
-                    list(self.song_history),
-                    duration_ms,
-                    final_queued=self.force_final,
-                )
-
-                divider()
-                print(f"▶ Playing: {bold(dance)}")
-                print(f"   Song: {bold(song)}")
-                print(f"   File: {path.name}")
-                dur_s = int(round(duration_ms / 1000.0))
-                print(f"   Length: {dur_s // 60}:{dur_s % 60:02d}")
-                if (
-                    loudness is not None
-                    and not np.isnan(loudness)
-                    and not np.isinf(loudness)
-                ):
-                    print(
-                        f"   Loudness: {loudness:.1f} LUFS → applied {gain_db:+.1f} dB"
-                    )
-                divider()
-
-                self.player.play(TEMP_FILE)
-
-                # Start first song paused (as requested) — only happens once
-                if self.first_song:
-                    self.player.pause()
-                    self.first_song = False
-
-                self.player.wait()
-
-                self.song_history.appendleft((dance, song))
-                self._save_played_log()
-
-                if self.force_final:
-                    break
-
-            if self.force_final:
-                break
-
-        # Final song
-        if FINAL_SONG:
-            path = self.matcher.get(FINAL_SONG)
-            if path:
-                audio, loudness, gain_db = normalize_audio(path)
-                audio = trim_silence(audio)
-                duration_ms = len(audio)
-                audio.export(TEMP_FILE, format="wav")
-
-                self.window.update(
-                    f"Final Dance - {FINAL_SONG}",
-                    "",
-                    list(
-                        self.categories.keys()
-                    ),  # keep showing all (now empty) categories
-                    list(self.song_history),
-                    duration_ms,
-                )
-
-                divider()
-                print(f"▶ Final Song: {bold(FINAL_SONG)}")
-                print(f"   File: {path.name}")
-                dur_s = int(round(duration_ms / 1000.0))
-                print(f"   Length: {dur_s // 60}:{dur_s % 60:02d}")
-                if (
-                    loudness is not None
-                    and not np.isnan(loudness)
-                    and not np.isinf(loudness)
-                ):
-                    print(
-                        f"   Loudness: {loudness:.1f} LUFS → applied {gain_db:+.1f} dB"
-                    )
-                divider()
-
-                self.player.play(TEMP_FILE)
-                self.player.wait()
-
-                self.played.add(FINAL_SONG)
-                self._save_played_log()
 
         pygame.mixer.music.stop()
+        self.cleanup()
         self.window.root.after(0, self.window.root.destroy)
 
 
@@ -1181,8 +1617,7 @@ class DanceController:
 
 def main() -> None:
     controller = DanceController()
-
-    threading.Thread(target=controller.run, daemon=True).start()
+    controller.start()
     controller.window.root.mainloop()
 
 
