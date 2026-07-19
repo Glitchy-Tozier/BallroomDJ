@@ -20,6 +20,7 @@ import pygame
 import pyloudnorm as pyln
 from colorama import just_fix_windows_console, Fore, Style
 from mutagen import File as MutagenFile
+from ordered_set import OrderedSet
 from pydub import AudioSegment
 from pydub.silence import detect_nonsilent
 
@@ -1315,24 +1316,25 @@ class DanceController:
         self.player = MusicPlayer()
 
         # State the GUI queries during its own construction must exist first.
-        self.played: set[str] = set()
+        self.played: OrderedSet[str] = OrderedSet()
         self.final_queued = False
 
         self.window = ControlWindow(self)
 
-        # ---- played log (unchanged semantics) ----
+        # ---- played log ----
         log_path = Path(PLAYED_LOG_FILE)
         if log_path.exists():
             try:
                 with open(log_path, encoding="utf8") as f:
-                    loaded = {line.strip() for line in f if line.strip()}
+                    loaded = OrderedSet(line.strip() for line in f if line.strip())
 
                 if loaded:
                     if self.window.ask_reset_log(len(loaded)):
                         log_path.unlink()
                         print(success("\n✓ Played songs log reset for new event."))
                     else:
-                        self.played.update(loaded)
+                        for song in loaded:
+                            self.played.add(song)
                         print(
                             success(
                                 f"\n✓ Loaded {len(loaded)} previously played songs from {PLAYED_LOG_FILE}"
@@ -1499,7 +1501,7 @@ class DanceController:
     def _save_played_log(self) -> None:
         try:
             with open(PLAYED_LOG_FILE, "w", encoding="utf8") as f:
-                for song in sorted(self.played):
+                for song in self.played:
                     f.write(song + "\n")
         except Exception as e:
             print(warning(f"Warning: could not save played log: {e}"))
