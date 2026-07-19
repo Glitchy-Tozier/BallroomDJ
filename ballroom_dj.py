@@ -30,7 +30,9 @@ from pydub.silence import detect_nonsilent
 
 os.environ["SDL_AUDIODRIVER"] = "pulse"  # Use PulseAudio backend (Linux audio system)
 
-HOME = Path.home()  # User home directory (base for all paths below)
+# Bases for all paths below
+PROJECT_DIR = Path(__file__).resolve().parent  # Project directory
+HOME = Path.home()  # User home directory
 
 # Text file defining dance categories + songs
 SONG_LIST_FILE = HOME / "Music/Tanzmusik.txt"
@@ -88,7 +90,7 @@ SILENCE_MIN_LEN_MS = 500  # Minimum silence length to be trimmed
 HISTORY_LENGTH = 12  # Number of recent songs shown in UI
 
 # Stores played songs to avoid repeats across runs
-PLAYED_LOG_FILE = HOME / "Music/played_songs.log"
+PLAYED_LOG_FILE = PROJECT_DIR / ".played_songs.log"
 
 # -------------------------------------------
 # PRETTY CONSOLE
