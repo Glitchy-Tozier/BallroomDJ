@@ -80,7 +80,7 @@ TARGET_LOUDNESS = -14.0  # Normalize all songs to this loudness (LUFS)
 PREPARE_AHEAD = 10
 
 # Directory where prepared (normalized/trimmed) wav files are written.
-PREPARED_DIR = Path(tempfile.mkdtemp(prefix="dance_player_"))
+PREPARED_DIR = Path(tempfile.mkdtemp(prefix="ballroom_dj_"))
 
 TRIM_SILENCE = True  # Automatically remove silence at start/end of songs
 SILENCE_THRESHOLD_DB = -50  # What counts as silence (lower = stricter)
